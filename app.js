@@ -1,0 +1,2173 @@
+/* ==========================================================================
+   PROYECTO AURA - LÓGICA DE LA APLICACIÓN (VANILLA JS ES6+)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. ESTRUCTURA DE DATOS INTERNA (AURAS DE ÁNIMO)
+   -------------------------------------------------------------------------- */
+const MOODS_DATA = [
+  {
+    id: 'relaxed',
+    name: 'Relajado',
+    emoji: '🧘',
+    quote: 'Suelta el control y permite que el momento fluya. Respira hondo, estás en el lugar correcto.',
+    audioName: 'Oleaje Oceánico (Ruido Rosa Modulado)',
+    auras: {
+      '--color-aura-1': 'rgba(79, 209, 197, 0.65)',  /* Turquesa */
+      '--color-aura-2': 'rgba(99, 179, 237, 0.65)',  /* Celeste */
+      '--color-aura-3': 'rgba(159, 122, 234, 0.5)',   /* Púrpura */
+      '--color-aura-4': 'rgba(246, 173, 85, 0.4)'     /* Melocotón */
+    },
+    audioGenerator: (audioCtx, destination) => {
+      // Síntesis de Olas de Mar (Ruido modulado lentamente por un LFO)
+
+      // 1. Crear búfer de ruido blanco/rosa
+      const bufferSize = 4 * audioCtx.sampleRate;
+      const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+
+      const noiseSource = audioCtx.createBufferSource();
+      noiseSource.buffer = noiseBuffer;
+      noiseSource.loop = true;
+
+      // 2. Filtro de paso bajo para suavizar el ruido (hacerlo sonar como mar)
+      const lowpass = audioCtx.createBiquadFilter();
+      lowpass.type = 'lowpass';
+      lowpass.frequency.setValueAtTime(250, audioCtx.currentTime);
+      lowpass.Q.setValueAtTime(1, audioCtx.currentTime);
+
+      // 3. LFO (Oscilador de baja frecuencia) para simular el vaivén de las olas
+      const lfo = audioCtx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.setValueAtTime(0.08, audioCtx.currentTime); // Ciclo de 12.5 segundos
+
+      // 4. Ganancia del LFO para modular la frecuencia de corte del filtro
+      const lfoGainFilter = audioCtx.createGain();
+      lfoGainFilter.gain.setValueAtTime(150, audioCtx.currentTime); // Modulación de +-150Hz
+
+      // 5. Ganancia de sonido modulada por el mismo LFO para simular la marea alta/baja
+      const lfoGainVol = audioCtx.createGain();
+      lfoGainVol.gain.setValueAtTime(0.4, audioCtx.currentTime); // Profundidad de volumen del oleaje
+
+      const waveGain = audioCtx.createGain();
+      waveGain.gain.setValueAtTime(0.2, audioCtx.currentTime); // Volumen base de olas
+
+      // Conexiones
+      lfo.connect(lfoGainFilter);
+      lfoGainFilter.connect(lowpass.frequency); // Modula frecuencia del filtro
+
+      lfo.connect(lfoGainVol);
+      lfoGainVol.connect(waveGain.gain); // Modula volumen del sonido
+
+      noiseSource.connect(lowpass);
+      lowpass.connect(waveGain);
+      waveGain.connect(destination);
+
+      // Iniciar osciladores y fuentes
+      noiseSource.start();
+      lfo.start();
+
+      return [noiseSource, lfo, lowpass, lfoGainFilter, lfoGainVol, waveGain];
+    }
+  },
+  {
+    id: 'focused',
+    name: 'Enfocado',
+    emoji: '👁️',
+    quote: 'La claridad mental surge de la quietud interior. Centra tu atención aquí y ahora.',
+    audioName: 'Ondas Cerebrales Alfa (Binaural Beats a 10Hz)',
+    auras: {
+      '--color-aura-1': 'rgba(102, 126, 234, 0.65)', /* Azul real */
+      '--color-aura-2': 'rgba(118, 75, 162, 0.65)',  /* Púrpura profundo */
+      '--color-aura-3': 'rgba(56, 189, 248, 0.5)',   /* Azul cian */
+      '--color-aura-4': 'rgba(165, 180, 252, 0.4)'   /* Añil pastel */
+    },
+    audioGenerator: (audioCtx, destination) => {
+      // Síntesis de Ondas Alfa Binaurales (140Hz Oído Izquierdo / 150Hz Oído Derecho)
+
+      const oscL = audioCtx.createOscillator();
+      const oscR = audioCtx.createOscillator();
+      const merger = audioCtx.createChannelMerger(2);
+
+      oscL.type = 'sine';
+      oscL.frequency.setValueAtTime(140, audioCtx.currentTime); // Frecuencia portadora izquierda
+
+      oscR.type = 'sine';
+      oscR.frequency.setValueAtTime(150, audioCtx.currentTime); // Portadora derecha (140 + 10Hz)
+
+      // Control de ganancia independiente para suavizar el tono
+      const toneGain = audioCtx.createGain();
+      toneGain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+
+      // Filtro para suavizar y hacerlo aún más profundo
+      const lp = audioCtx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(180, audioCtx.currentTime);
+
+      // Conexiones de estéreo
+      oscL.connect(merger, 0, 0); // Izquierda
+      oscR.connect(merger, 0, 1); // Derecha
+
+      merger.connect(lp);
+      lp.connect(toneGain);
+      toneGain.connect(destination);
+
+      oscL.start();
+      oscR.start();
+
+      return [oscL, oscR, merger, lp, toneGain];
+    }
+  },
+  {
+    id: 'creative',
+    name: 'Creativo',
+    emoji: '🎨',
+    quote: 'La creatividad es la inteligencia divirtiéndose. Deja que tus pensamientos fluyan sin límites.',
+    audioName: 'Acorde Celestial (Pad Sintetizado con Oscilaciones LFO)',
+    auras: {
+      '--color-aura-1': 'rgba(255, 121, 121, 0.65)', /* Coral */
+      '--color-aura-2': 'rgba(254, 202, 87, 0.65)',  /* Amarillo cálido */
+      '--color-aura-3': 'rgba(72, 219, 251, 0.5)',   /* Celeste brillante */
+      '--color-aura-4': 'rgba(255, 159, 243, 0.5)'   /* Rosa chicle */
+    },
+    audioGenerator: (audioCtx, destination) => {
+      // Síntesis de un acorde de fondo celestial que fluctúa (Cmaj9)
+      const frequencies = [130.81, 196.00, 261.63, 329.63, 493.88, 587.33]; // C3, G3, C4, E4, B4, D5
+      const nodesCreated = [];
+
+      // Filtro general cálido
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(450, audioCtx.currentTime);
+
+      // Ganancia maestra del pad
+      const padGain = audioCtx.createGain();
+      padGain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+
+      frequencies.forEach((freq, index) => {
+        const osc = audioCtx.createOscillator();
+        osc.type = 'triangle'; // Forma de onda cálida
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+        // Ganancia individual del oscilador para modulación armónica
+        const noteGain = audioCtx.createGain();
+        noteGain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+
+        // LFO individual para cada nota para que el acorde respire
+        const lfo = audioCtx.createOscillator();
+        lfo.type = 'sine';
+        lfo.frequency.setValueAtTime(0.04 + index * 0.015, audioCtx.currentTime); // Frecuencias muy lentas y diferentes
+
+        const lfoGain = audioCtx.createGain();
+        lfoGain.gain.setValueAtTime(0.025, audioCtx.currentTime);
+
+        // Conexión
+        lfo.connect(lfoGain);
+        lfoGain.connect(noteGain.gain); // Modula volumen de esta nota
+
+        osc.connect(noteGain);
+        noteGain.connect(filter);
+
+        osc.start();
+        lfo.start();
+
+        nodesCreated.push(osc, lfo, noteGain, lfoGain);
+      });
+
+      filter.connect(padGain);
+      padGain.connect(destination);
+
+      nodesCreated.push(filter, padGain);
+      return nodesCreated;
+    }
+  },
+  {
+    id: 'energetic',
+    name: 'Enérgico',
+    emoji: '⚡',
+    quote: 'Toda gran energía comienza con un aliento consciente. Activa tu cuerpo, enfoca tu visión.',
+    audioName: 'Ritmo Pulsante Vital (Drone Rítmico a 72 BPM)',
+    auras: {
+      '--color-aura-1': 'rgba(255, 99, 72, 0.65)',   /* Rojo-Naranja vibrante */
+      '--color-aura-2': 'rgba(255, 230, 0, 0.6)',    /* Amarillo eléctrico */
+      '--color-aura-3': 'rgba(235, 77, 75, 0.55)',    /* Carmín */
+      '--color-aura-4': 'rgba(240, 147, 43, 0.45)'   /* Ámbar */
+    },
+    audioGenerator: (audioCtx, destination) => {
+      // Síntesis de un pulso rítmico bajo constante
+      const droneOsc = audioCtx.createOscillator();
+      droneOsc.type = 'sine';
+      droneOsc.frequency.setValueAtTime(73.42, audioCtx.currentTime); // D2 (Frecuencia baja de resonancia)
+
+      const subOsc = audioCtx.createOscillator();
+      subOsc.type = 'triangle';
+      subOsc.frequency.setValueAtTime(110.00, audioCtx.currentTime); // A2
+
+      // Filtro para mantenerlo sutil y sin agudos
+      const lp = audioCtx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(120, audioCtx.currentTime);
+
+      // Modulación de volumen (LFO en onda cuadrada/sierra simulada) para simular latido rítmico (1.2 Hz = 72 BPM)
+      const rhythmLfo = audioCtx.createOscillator();
+      rhythmLfo.type = 'sine';
+      rhythmLfo.frequency.setValueAtTime(1.2, audioCtx.currentTime);
+
+      const lfoGain = audioCtx.createGain();
+      lfoGain.gain.setValueAtTime(0.08, audioCtx.currentTime); // Nivel de la oscilación de volumen
+
+      const dynamicGain = audioCtx.createGain();
+      dynamicGain.gain.setValueAtTime(0.12, audioCtx.currentTime); // Volumen base
+
+      // Conexiones
+      rhythmLfo.connect(lfoGain);
+      lfoGain.connect(dynamicGain.gain); // Modula volumen rítmicamente
+
+      droneOsc.connect(lp);
+      subOsc.connect(lp);
+      lp.connect(dynamicGain);
+      dynamicGain.connect(destination);
+
+      droneOsc.start();
+      subOsc.start();
+      rhythmLfo.start();
+
+      return [droneOsc, subOsc, rhythmLfo, lp, lfoGain, dynamicGain];
+    }
+  }
+];
+
+/* --------------------------------------------------------------------------
+   2. CONFIGURACIÓN DE PATRONES DE RESPIRACIÓN
+   -------------------------------------------------------------------------- */
+const BREATHING_PATTERNS = {
+  box: [
+    { phase: 'Inhala', duration: 4, class: 'state-inhale' },
+    { phase: 'Mantén', duration: 4, class: 'state-hold' },
+    { phase: 'Exhala', duration: 4, class: 'state-exhale' },
+    { phase: 'Retén', duration: 4, class: 'state-idle' }
+  ],
+  relax: [
+    { phase: 'Inhala', duration: 4, class: 'state-inhale' },
+    { phase: 'Mantén', duration: 7, class: 'state-hold' },
+    { phase: 'Exhala', duration: 8, class: 'state-exhale' }
+  ],
+  deep: [
+    { phase: 'Inhala', duration: 5, class: 'state-inhale' },
+    { phase: 'Exhala', duration: 5, class: 'state-exhale' }
+  ]
+};
+
+/* --------------------------------------------------------------------------
+   3. ESTADO GLOBAL DE LA APLICACIÓN
+   -------------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+   3. ARCHIVO DE PERSISTENCIA Y ESTADO CENTRALIZADO (USER STATE)
+   -------------------------------------------------------------------------- */
+const DEFAULT_USER_STATE = {
+  isLoggedIn: false,
+  profile: { name: "", personalityType: "balanceado" }, // "analitico", "creativo", "sensorial", "balanceado"
+  moodLogs: [],         // Array de registros de emociones/síntomas
+  gratitudeEntries: [], // Array de { date: "YYYY-MM-DD", text: "" }
+  dailyIntention: null, // Intención actual del día
+  dailyIntentions: [],  // Historial de intenciones del día asignadas
+  preferences: { theme: "dark", volume: 0.3 }
+};
+
+let userState = JSON.parse(JSON.stringify(DEFAULT_USER_STATE));
+
+const state = {
+  activeMood: null,
+  isAudioPlaying: false,
+
+  // Estado del temporizador de respiración
+  breathing: {
+    patternId: 'box',
+    isRunning: false,
+    currentStepIndex: 0,
+    secondsRemaining: 0,
+    timerInterval: null
+  },
+
+  // Estado del Registro de Emociones y Síntomas
+  tracker: {
+    selectedMood: null,
+    intensity: 3,
+    symptoms: []
+  }
+};
+
+/* --------------------------------------------------------------------------
+   4. INICIALIZACIÓN DE VARIABLES DE AUDIO
+   -------------------------------------------------------------------------- */
+let audioCtx = null;
+let globalGainNode = null;
+let currentSynthNodes = [];
+
+/* --------------------------------------------------------------------------
+   5. REFERENCIAS DEL DOM
+   -------------------------------------------------------------------------- */
+const elements = {
+  body: document.body,
+  themeToggle: document.getElementById('theme-toggle'),
+  volumeSlider: document.getElementById('volume-slider'),
+  moodContainer: document.getElementById('mood-selector-container'),
+  moodQuote: document.getElementById('mood-quote'),
+  audioDescription: document.getElementById('audio-description'),
+  audioStatusBox: document.querySelector('.mood-audio-status'),
+
+  // Respiración
+  patternButtons: document.querySelectorAll('.pattern-btn'),
+  breathingCircle: document.getElementById('breathing-circle'),
+  breathingPhase: document.getElementById('breathing-phase'),
+  breathingTimer: document.getElementById('breathing-timer'),
+  btnStart: document.getElementById('btn-breathing-start'),
+  btnPause: document.getElementById('btn-breathing-pause'),
+  btnReset: document.getElementById('btn-breathing-reset'),
+
+  // Registro de Síntomas y Emociones
+  moodTagButtons: document.querySelectorAll('.mood-tag-btn'),
+  symptomIntensity: document.getElementById('symptom-intensity'),
+  intensityValueDisplay: document.getElementById('intensity-value-display'),
+  symptomTags: document.querySelectorAll('.symptom-tag'),
+  btnSaveTracker: document.getElementById('btn-save-tracker'),
+  weeklyHistoryContainer: document.getElementById('weekly-history-container'),
+  trackerForm: document.getElementById('tracker-form'),
+
+  // Diario de Gratitud
+  gratitudeForm: document.getElementById('gratitude-form'),
+  gratitudeText: document.getElementById('gratitude-text'),
+  charCounter: document.getElementById('char-counter'),
+  btnSaveGratitude: document.getElementById('btn-save-gratitude'),
+  gratitudeHistoryContainer: document.getElementById('gratitude-history-container'),
+
+  // Intención del Día
+  intentionText: document.getElementById('intention-text'),
+  btnRefreshIntention: document.getElementById('btn-refresh-intention'),
+
+  // Onboarding / Autenticación y Cuentas de Usuario
+  onboardingModal: document.getElementById('onboarding-modal'),
+  authLoginView: document.getElementById('auth-login-view'),
+  authRegisterView: document.getElementById('auth-register-view'),
+  loginUsername: document.getElementById('login-username'),
+  loginPassword: document.getElementById('login-password'),
+  linkForgotPassword: document.getElementById('link-forgot-password'),
+  loginErrorMsg: document.getElementById('login-error-msg'),
+  btnSubmitLogin: document.getElementById('btn-submit-login'),
+  linkToRegister: document.getElementById('link-to-register'),
+  registerUsername: document.getElementById('register-username'),
+  registerPassword: document.getElementById('register-password'),
+  registerName: document.getElementById('register-name'),
+  registerPersonality: document.getElementById('register-personality'),
+  registerQuestion: document.getElementById('register-question'),
+  registerAnswer: document.getElementById('register-answer'),
+  registerErrorMsg: document.getElementById('register-error-msg'),
+  btnSubmitRegister: document.getElementById('btn-submit-register'),
+  linkToLogin: document.getElementById('link-to-login'),
+
+  // Vista: Recuperar Contraseña
+  authRecoverView: document.getElementById('auth-recover-view'),
+  recoverStep1: document.getElementById('recover-step-1'),
+  recoverStep2: document.getElementById('recover-step-2'),
+  recoverUsername: document.getElementById('recover-username'),
+  recoverUserError: document.getElementById('recover-user-error'),
+  btnRecoverCheckUser: document.getElementById('btn-recover-check-user'),
+  recoverQuestionText: document.getElementById('recover-question-text'),
+  recoverAnswer: document.getElementById('recover-answer'),
+  recoverNewPassword: document.getElementById('recover-new-password'),
+  recoverAnswerError: document.getElementById('recover-answer-error'),
+  btnSubmitRecovery: document.getElementById('btn-submit-recovery'),
+  recoverSuccessMsg: document.getElementById('recover-success-msg'),
+  linkRecoverBackToLogin: document.getElementById('link-recover-back-to-login'),
+
+  // Vista Perfil de Usuario
+  dashboardView: document.getElementById('dashboard-view'),
+  profileView: document.getElementById('profile-view'),
+  profileAvatarLarge: document.getElementById('profile-avatar-large'),
+  profileUsernameDisplay: document.getElementById('profile-username-display'),
+  profileEditName: document.getElementById('profile-edit-name'),
+  profileEditPersonality: document.getElementById('profile-edit-personality'),
+  profileEditSuccess: document.getElementById('profile-edit-success'),
+  btnSaveProfileChanges: document.getElementById('btn-save-profile-changes'),
+  statTotalLogs: document.getElementById('stat-total-logs'),
+  statTotalGratitudes: document.getElementById('stat-total-gratitudes'),
+  statDominantMood: document.getElementById('stat-dominant-mood'),
+  statCommonSymptom: document.getElementById('stat-common-symptom'),
+  statAvgIntensity: document.getElementById('stat-avg-intensity'),
+  statAvgIntensityFill: document.getElementById('stat-avg-intensity-fill'),
+  profileMoodHistoryList: document.getElementById('profile-mood-history-list'),
+  profileGratitudeHistoryList: document.getElementById('profile-gratitude-history-list'),
+  profileIntentionHistoryList: document.getElementById('profile-intention-history-list'),
+  btnProfileBack: document.getElementById('btn-profile-back'),
+
+  // Perfil del header
+  userBadge: document.getElementById('user-badge'),
+  userAvatarChar: document.getElementById('user-avatar-char'),
+  userNameLabel: document.getElementById('user-name-label'),
+  logoutBtn: document.getElementById('logout-btn'),
+
+  heroTitle: document.querySelector('.hero-title')
+};
+
+/* --------------------------------------------------------------------------
+   6. GESTOR DE TEMA (LIGHT/DARK)
+   -------------------------------------------------------------------------- */
+function initTheme() {
+  const savedTheme = userState.preferences.theme;
+  if (savedTheme === 'light') {
+    elements.body.classList.add('light-theme');
+  } else {
+    elements.body.classList.remove('light-theme');
+  }
+}
+
+function toggleTheme() {
+  if (userState.preferences.theme === 'dark') {
+    userState.preferences.theme = 'light';
+    elements.body.classList.add('light-theme');
+  } else {
+    userState.preferences.theme = 'dark';
+    elements.body.classList.remove('light-theme');
+  }
+  saveUserState();
+}
+
+/* --------------------------------------------------------------------------
+   7. CONTROLADORES DE AUDIO (WEB AUDIO API ENGINE)
+   -------------------------------------------------------------------------- */
+function initAudio() {
+  if (audioCtx) return;
+
+  try {
+    // Inicializar el contexto de audio
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AudioContextClass();
+
+    // Crear nodo de ganancia maestro para el volumen
+    globalGainNode = audioCtx.createGain();
+    globalGainNode.gain.setValueAtTime(userState.preferences.volume, audioCtx.currentTime);
+    globalGainNode.connect(audioCtx.destination);
+  } catch (error) {
+    console.error('Error al inicializar Web Audio API:', error);
+  }
+}
+
+function stopCurrentSynthesizers(fadeTime = 0.5) {
+  if (currentSynthNodes.length === 0) return;
+
+  const now = audioCtx.currentTime;
+
+  // Realizar un fade out progresivo para evitar 'clicks' o ruidos molestos
+  currentSynthNodes.forEach(node => {
+    // Si es un nodo de ganancia (GainNode), bajamos su volumen gradualmente
+    if (node instanceof GainNode) {
+      node.gain.setValueAtTime(node.gain.value, now);
+      node.gain.exponentialRampToValueAtTime(0.001, now + fadeTime);
+    }
+  });
+
+  const nodesToStop = [...currentSynthNodes];
+  currentSynthNodes = [];
+
+  // Apagar y desconectar físicamente los nodos tras la transición
+  setTimeout(() => {
+    nodesToStop.forEach(node => {
+      try {
+        if (typeof node.stop === 'function') {
+          node.stop();
+        }
+        node.disconnect();
+      } catch (e) {
+        // Ignorar errores menores al desconectar nodos de audio
+      }
+    });
+  }, fadeTime * 1000);
+}
+
+function startMoodAudio(mood) {
+  initAudio();
+
+  // Si el contexto está suspendido (política del navegador), lo reanudamos
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+
+  // Detener el audio previo suavemente antes de iniciar el nuevo
+  stopCurrentSynthesizers(0.6);
+
+  // Iniciar la síntesis en tiempo real del nuevo estado de ánimo
+  setTimeout(() => {
+    if (!state.isAudioPlaying || state.activeMood !== mood.id) return;
+
+    try {
+      currentSynthNodes = mood.audioGenerator(audioCtx, globalGainNode);
+      elements.audioDescription.textContent = `Sonido: ${mood.audioName}`;
+      elements.audioStatusBox.classList.add('playing');
+    } catch (err) {
+      console.error('Error al iniciar el sintetizador del ánimo:', err);
+      elements.audioDescription.textContent = 'Error al sintetizar el sonido ambiental';
+      elements.audioStatusBox.classList.remove('playing');
+    }
+  }, 100);
+}
+
+function handleVolumeChange(e) {
+  userState.preferences.volume = parseFloat(e.target.value);
+  saveUserState();
+
+  if (globalGainNode && audioCtx) {
+    // Suavizamos el cambio de volumen
+    globalGainNode.gain.setTargetAtTime(userState.preferences.volume, audioCtx.currentTime, 0.05);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   8. GENERACIÓN DINÁMICA DE ELEMENTOS (MOOD SELECTOR)
+   -------------------------------------------------------------------------- */
+function renderMoodSelector() {
+  elements.moodContainer.innerHTML = '';
+
+  MOODS_DATA.forEach(mood => {
+    // Crear el botón dinámico del ánimo
+    const button = document.createElement('button');
+    button.className = 'mood-btn';
+    button.setAttribute('data-mood', mood.id);
+    button.setAttribute('aria-pressed', 'false');
+
+    // Contenido estructurado del botón
+    button.innerHTML = `
+      <span class="mood-emoji" aria-hidden="true">${mood.emoji}</span>
+      <span>${mood.name}</span>
+    `;
+
+    button.addEventListener('click', () => selectMood(mood.id));
+    elements.moodContainer.appendChild(button);
+  });
+}
+
+function selectMood(moodId) {
+  const selectedMood = MOODS_DATA.find(m => m.id === moodId);
+  if (!selectedMood) return;
+
+  // Si hace clic en el ánimo activo, pausa/reanuda el audio
+  if (state.activeMood === moodId) {
+    state.isAudioPlaying = !state.isAudioPlaying;
+
+    if (state.isAudioPlaying) {
+      startMoodAudio(selectedMood);
+      elements.audioStatusBox.classList.add('playing');
+    } else {
+      stopCurrentSynthesizers(0.4);
+      elements.audioDescription.textContent = 'Sonido ambiental pausado';
+      elements.audioStatusBox.classList.remove('playing');
+    }
+
+    // Actualizar accesibilidad (aria-pressed) en los botones
+    const activeBtn = elements.moodContainer.querySelector(`[data-mood="${moodId}"]`);
+    if (activeBtn) {
+      activeBtn.setAttribute('aria-pressed', state.isAudioPlaying ? 'true' : 'false');
+    }
+    return;
+  }
+
+  // Si es un cambio de ánimo
+  state.activeMood = moodId;
+  state.isAudioPlaying = true;
+
+  // Actualizar los colores de la aurora (variables CSS en root)
+  const root = document.documentElement;
+  Object.keys(selectedMood.auras).forEach(key => {
+    root.style.setProperty(key, selectedMood.auras[key]);
+  });
+
+  // Animación suave de cambio de frase en la tarjeta
+  elements.moodQuote.style.opacity = 0;
+  setTimeout(() => {
+    elements.moodQuote.textContent = selectedMood.quote;
+    elements.moodQuote.style.opacity = 1;
+  }, 250);
+
+  // Agregar transición CSS a la cita para que se difumine suavemente
+  elements.moodQuote.style.transition = 'opacity 0.25s ease';
+
+  // Cambiar clases activas en los botones de la interfaz
+  const buttons = elements.moodContainer.querySelectorAll('.mood-btn');
+  buttons.forEach(btn => {
+    if (btn.getAttribute('data-mood') === moodId) {
+      btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
+    } else {
+      btn.classList.remove('active');
+      btn.setAttribute('aria-pressed', 'false');
+    }
+  });
+
+  // Reproducir el sonido correspondiente
+  startMoodAudio(selectedMood);
+}
+
+/* --------------------------------------------------------------------------
+   9. TEMPORIZADOR DE RESPIRACIÓN GUIADA (STATE MACHINE)
+   -------------------------------------------------------------------------- */
+function updateBreathingCircleUI(step) {
+  // Ajustar la duración de la transición en CSS para sincronizarse con la fase
+  elements.breathingCircle.style.setProperty('--breathing-duration', `${step.duration}s`);
+
+  // Limpiar estados previos
+  elements.breathingCircle.classList.remove('state-idle', 'state-inhale', 'state-hold', 'state-exhale');
+
+  // Agregar el nuevo estado visual
+  elements.breathingCircle.classList.add(step.class);
+
+  // Actualizar textos
+  elements.breathingPhase.textContent = step.phase;
+  elements.breathingTimer.textContent = step.duration;
+}
+
+function startBreathingCycle() {
+  const steps = BREATHING_PATTERNS[state.breathing.patternId];
+
+  // Reiniciamos al paso 0 si es la primera ejecución o se salió de rango
+  if (state.breathing.currentStepIndex >= steps.length) {
+    state.breathing.currentStepIndex = 0;
+  }
+
+  let currentStep = steps[state.breathing.currentStepIndex];
+
+  // Si no hay un conteo en curso (es decir, empezamos de cero o de un reinicio), asignamos la duración total
+  if (state.breathing.secondsRemaining <= 0) {
+    state.breathing.secondsRemaining = currentStep.duration;
+  }
+
+  // Actualizamos el círculo visual inmediatamente
+  updateBreathingCircleUI(currentStep);
+
+  // Si estamos reanudando, mostramos los segundos restantes correctos
+  elements.breathingTimer.textContent = state.breathing.secondsRemaining;
+
+  state.breathing.timerInterval = setInterval(() => {
+    state.breathing.secondsRemaining--;
+
+    // Si todavía queda tiempo en la fase actual
+    if (state.breathing.secondsRemaining >= 0) {
+      elements.breathingTimer.textContent = state.breathing.secondsRemaining;
+    }
+
+    // Si la fase ha concluido, pasamos a la siguiente
+    if (state.breathing.secondsRemaining < 0) {
+      state.breathing.currentStepIndex = (state.breathing.currentStepIndex + 1) % steps.length;
+      currentStep = steps[state.breathing.currentStepIndex];
+      state.breathing.secondsRemaining = currentStep.duration;
+
+      updateBreathingCircleUI(currentStep);
+    }
+  }, 1000);
+}
+
+function handleBreathingStart() {
+  if (state.breathing.isRunning) return;
+
+  // Requerimos inicializar audio por si el usuario desea sincronizar respiración con sonido
+  initAudio();
+
+  state.breathing.isRunning = true;
+  elements.btnStart.disabled = true;
+  elements.btnPause.disabled = false;
+
+  startBreathingCycle();
+}
+
+function handleBreathingPause() {
+  if (!state.breathing.isRunning) return;
+
+  state.breathing.isRunning = false;
+  elements.btnStart.disabled = false;
+  elements.btnPause.disabled = true;
+
+  clearInterval(state.breathing.timerInterval);
+}
+
+function handleBreathingReset() {
+  state.breathing.isRunning = false;
+  state.breathing.currentStepIndex = 0;
+  state.breathing.secondsRemaining = 0;
+
+  clearInterval(state.breathing.timerInterval);
+
+  // Restaurar estado visual inicial
+  elements.breathingCircle.style.setProperty('--breathing-duration', '1s');
+  elements.breathingCircle.className = 'breathing-circle state-idle';
+  elements.breathingPhase.textContent = 'Iniciar';
+  elements.breathingTimer.textContent = '--';
+
+  elements.btnStart.disabled = false;
+  elements.btnPause.disabled = true;
+}
+
+function changeBreathingPattern(e) {
+  const btn = e.currentTarget;
+  const patternId = btn.getAttribute('data-pattern');
+
+  if (state.breathing.patternId === patternId) return;
+
+  // Actualizar el estado del patrón
+  state.breathing.patternId = patternId;
+
+  // Actualizar la interfaz de los botones del patrón
+  elements.patternButtons.forEach(button => {
+    if (button === btn) {
+      button.classList.add('active');
+      button.setAttribute('aria-pressed', 'true');
+    } else {
+      button.classList.remove('active');
+      button.setAttribute('aria-pressed', 'false');
+    }
+  });
+
+  // Reiniciar el ciclo de respiración para aplicar el nuevo patrón de inmediato
+  handleBreathingReset();
+}
+
+/* --------------------------------------------------------------------------
+   10. GESTOR Y PERSISTENCIA DE REGISTRO DIARIO (USER STATE & MIGRACIONES)
+   -------------------------------------------------------------------------- */
+function saveUserState() {
+  try {
+    localStorage.setItem('aura_app_data', JSON.stringify(userState));
+    saveActiveUserSession();
+  } catch (err) {
+    console.error('Error al guardar userState:', err);
+  }
+}
+
+function loadUserState() {
+  try {
+    const saved = localStorage.getItem('aura_app_data');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      userState = {
+        ...DEFAULT_USER_STATE,
+        ...parsed,
+        profile: { ...DEFAULT_USER_STATE.profile, ...(parsed.profile || {}) },
+        preferences: { ...DEFAULT_USER_STATE.preferences, ...(parsed.preferences || {}) }
+      };
+    } else {
+      // --- MIGRACIÓN DE DATOS DE CLAVES ANTIGUAS ---
+      let migrated = false;
+
+      // 1. Tema antiguo (probar keys: 'aura-theme', 'theme')
+      const oldTheme = localStorage.getItem('aura-theme') || localStorage.getItem('theme');
+      if (oldTheme) {
+        userState.preferences.theme = oldTheme;
+        localStorage.removeItem('aura-theme');
+        localStorage.removeItem('theme');
+        migrated = true;
+      }
+
+      // 2. Volumen antiguo (probar keys: 'volume', 'aura-volume')
+      const oldVolume = localStorage.getItem('volume') || localStorage.getItem('aura-volume');
+      if (oldVolume) {
+        const vol = parseFloat(oldVolume);
+        if (!isNaN(vol)) {
+          userState.preferences.volume = vol;
+        }
+        localStorage.removeItem('volume');
+        localStorage.removeItem('aura-volume');
+        migrated = true;
+      }
+
+      // 3. Historial de síntomas antiguo
+      const oldTracker = localStorage.getItem('aura-symptom-tracker');
+      if (oldTracker) {
+        try {
+          userState.moodLogs = JSON.parse(oldTracker);
+        } catch (e) {
+          console.error('Error parsing old symptom tracker data:', e);
+        }
+        localStorage.removeItem('aura-symptom-tracker');
+        migrated = true;
+      }
+
+      // Si se migró algún dato, guardar el nuevo estado unificado de inmediato
+      if (migrated) {
+        saveUserState();
+      }
+    }
+
+    // Cargar sesión del usuario logueado sobreescribiendo si aplica
+    const currentUsername = localStorage.getItem('aura_current_user');
+    if (currentUsername) {
+      loadActiveUserSession();
+    }
+  } catch (err) {
+    console.error('Error al cargar userState:', err);
+  }
+}
+
+function initTracker() {
+  // Manejador de botones de emoción del día
+  elements.moodTagButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const moodTag = btn.getAttribute('data-mood-tag');
+
+      // Marcar activo en UI
+      elements.moodTagButtons.forEach(b => {
+        if (b === btn) {
+          b.classList.add('active');
+        } else {
+          b.classList.remove('active');
+        }
+      });
+
+      state.tracker.selectedMood = moodTag;
+      elements.btnSaveTracker.disabled = false; // Habilitar guardado al tener emoción
+    });
+  });
+
+  // Manejador del rango de intensidad
+  elements.symptomIntensity.addEventListener('input', (e) => {
+    const val = e.target.value;
+    state.tracker.intensity = parseInt(val);
+    elements.intensityValueDisplay.textContent = val;
+  });
+
+  // Manejador de tags de síntomas (multiselección)
+  elements.symptomTags.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const symptom = btn.getAttribute('data-symptom-tag');
+      const index = state.tracker.symptoms.indexOf(symptom);
+
+      if (index > -1) {
+        state.tracker.symptoms.splice(index, 1);
+        btn.classList.remove('active');
+      } else {
+        state.tracker.symptoms.push(symptom);
+        btn.classList.add('active');
+      }
+    });
+  });
+
+  // Manejador de envío del formulario
+  elements.trackerForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveTrackerRecord();
+  });
+}
+
+function saveTrackerRecord() {
+  if (!state.tracker.selectedMood) return;
+
+  // Obtener fecha YYYY-MM-DD en hora local
+  const now = new Date();
+  const offset = now.getTimezoneOffset();
+  const localDate = new Date(now.getTime() - (offset * 60 * 1000));
+  const dateStr = localDate.toISOString().split('T')[0];
+
+  // Estructura del nuevo registro
+  const record = {
+    id: "rec_" + Date.now(),
+    date: dateStr,
+    mood: state.tracker.selectedMood,
+    intensity: state.tracker.intensity,
+    symptoms: [...state.tracker.symptoms]
+  };
+
+  // Filtrar registros duplicados para el mismo día (YYYY-MM-DD)
+  userState.moodLogs = userState.moodLogs.filter(rec => rec.date !== dateStr);
+
+  // Agregar nuevo registro
+  userState.moodLogs.push(record);
+
+  // Guardar en almacenamiento local unificado y en el esquema del usuario (clave: aura_user)
+  saveData(record);
+  saveUserState();
+
+  // Actualizar historial semanal
+  renderWeeklyHistory();
+
+  // Efecto visual de guardado en el botón
+  const originalHtml = elements.btnSaveTracker.innerHTML;
+  elements.btnSaveTracker.innerHTML = `
+    <svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+    ¡Guardado!
+  `;
+  elements.btnSaveTracker.classList.add('btn-success');
+  elements.btnSaveTracker.disabled = true;
+
+  setTimeout(() => {
+    elements.btnSaveTracker.innerHTML = originalHtml;
+    elements.btnSaveTracker.classList.remove('btn-success');
+
+    // Limpiar selección de formulario
+    resetTrackerForm();
+  }, 1500);
+}
+
+function resetTrackerForm() {
+  state.tracker.selectedMood = null;
+  state.tracker.intensity = 3;
+  state.tracker.symptoms = [];
+
+  elements.moodTagButtons.forEach(b => b.classList.remove('active'));
+  elements.symptomTags.forEach(b => b.classList.remove('active'));
+  elements.symptomIntensity.value = 3;
+  elements.intensityValueDisplay.textContent = 3;
+  elements.btnSaveTracker.disabled = true;
+}
+
+function renderWeeklyHistory() {
+  elements.weeklyHistoryContainer.innerHTML = '';
+
+  // Emojis y nombres descriptivos por emoción
+  const moodMeta = {
+    ansioso: { emoji: '😰', label: 'Ansioso' },
+    'en-paz': { emoji: '🧘‍♀️', label: 'En Paz' },
+    cansado: { emoji: '😴', label: 'Cansado' },
+    alegre: { emoji: '😊', label: 'Alegre' },
+    triste: { emoji: '😢', label: 'Triste' }
+  };
+
+  const symptomLabels = {
+    'dolor-cabeza': 'Dolor de cabeza',
+    'tension-muscular': 'Tensión muscular',
+    'rumiacion': 'Rumiación',
+    'falta-energia': 'Falta de energía',
+    'insomnio': 'Insomnio'
+  };
+
+  const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+  // Obtener las fechas de los últimos 7 días (terminando hoy)
+  const last7Days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const offset = d.getTimezoneOffset();
+    const localDate = new Date(d.getTime() - (offset * 60 * 1000));
+    const dateStr = localDate.toISOString().split('T')[0];
+    last7Days.push(dateStr);
+  }
+
+  // Generar marcado para cada día
+  last7Days.forEach(dateStr => {
+    // Buscar registro de este día
+    const record = userState.moodLogs.find(rec => rec.date === dateStr);
+
+    // Parsear nombre de día y número
+    const dateObj = new Date(dateStr + 'T00:00:00');
+    const dayLabel = `${dayNames[dateObj.getDay()]} ${dateObj.getDate()}`;
+
+    const dayItem = document.createElement('div');
+    dayItem.className = 'history-day-item';
+
+    let circleHtml = '';
+
+    if (record) {
+      const meta = moodMeta[record.mood] || { emoji: '❓', label: record.mood };
+      const symptomsText = record.symptoms.length > 0
+        ? record.symptoms.map(s => symptomLabels[s] || s).join(', ')
+        : 'Ninguno';
+
+      // Ajustar escala y opacidad según intensidad (1 a 5)
+      const scaleVal = 0.8 + (record.intensity * 0.08); // de 0.88 a 1.2
+      const opacityVal = 0.5 + (record.intensity * 0.1); // de 0.6 a 1.0
+
+      circleHtml = `
+        <div class="day-circle mood-${record.mood}" 
+             style="transform: scale(${scaleVal}); opacity: ${opacityVal};"
+             aria-haspopup="true">
+          ${meta.emoji}
+          <div class="tooltip-box">
+            <div class="tooltip-date">${dayLabel}</div>
+            <div class="tooltip-mood">${meta.emoji} ${meta.label}</div>
+            <div class="tooltip-intensity">Intensidad: ${record.intensity}/5</div>
+            <div class="tooltip-symptoms">Síntomas: ${symptomsText}</div>
+          </div>
+        </div>
+      `;
+    } else {
+      circleHtml = `
+        <div class="day-circle empty-day" title="Haz clic para registrar hoy" onclick="document.getElementById('tracker-section').scrollIntoView({behavior: 'smooth'})">
+          +
+          <div class="tooltip-box" style="min-width: 110px; text-align: center;">
+            <div class="tooltip-date">${dayLabel}</div>
+            <div>Sin registro</div>
+          </div>
+        </div>
+      `;
+    }
+
+    dayItem.innerHTML = `
+      <span class="day-label">${dayLabel}</span>
+      ${circleHtml}
+    `;
+
+    elements.weeklyHistoryContainer.appendChild(dayItem);
+  });
+}
+
+/* --------------------------------------------------------------------------
+   10B. GESTOR Y PERSISTENCIA DEL MICRO-DIARIO DE GRATITUD
+   -------------------------------------------------------------------------- */
+function initGratitudeJournal() {
+  if (!elements.gratitudeText) return;
+
+  // Escuchar entrada de texto en el textarea
+  elements.gratitudeText.addEventListener('input', (e) => {
+    const text = e.target.value;
+    const len = text.length;
+
+    // Actualizar contador
+    elements.charCounter.textContent = `${len}/180`;
+
+    // Cambiar color según proximidad al límite
+    elements.charCounter.className = 'char-counter'; // reset
+    if (len >= 165) {
+      elements.charCounter.classList.add('danger');
+    } else if (len >= 140) {
+      elements.charCounter.classList.add('warning');
+    }
+
+    // Habilitar/deshabilitar botón guardar
+    elements.btnSaveGratitude.disabled = len === 0;
+  });
+
+  // Guardar entrada al enviar formulario
+  elements.gratitudeForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveGratitudeEntry();
+  });
+}
+
+function saveGratitudeEntry() {
+  const text = elements.gratitudeText.value.trim();
+  if (!text) return;
+
+  // Generar fecha formateada de manera amigable
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+
+  const entry = {
+    id: Date.now(),
+    date: dateStr,
+    text: text
+  };
+
+  // Inicializar array si por alguna razón no existe
+  if (!userState.gratitudeEntries) {
+    userState.gratitudeEntries = [];
+  }
+
+  // Agregar al principio para mostrar las más recientes primero
+  userState.gratitudeEntries.unshift(entry);
+
+  // Guardar estado de usuario
+  saveUserState();
+
+  // Actualizar feed
+  renderGratitudeHistory();
+
+  // Animación del botón al guardar
+  const originalHtml = elements.btnSaveGratitude.innerHTML;
+  elements.btnSaveGratitude.innerHTML = `
+    <svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+    ¡Guardado!
+  `;
+  elements.btnSaveGratitude.classList.add('btn-success');
+  elements.btnSaveGratitude.disabled = true;
+
+  // Limpiar el textarea y resetear contador
+  elements.gratitudeText.value = '';
+  elements.charCounter.textContent = '0/180';
+  elements.charCounter.className = 'char-counter';
+
+  setTimeout(() => {
+    elements.btnSaveGratitude.innerHTML = originalHtml;
+    elements.btnSaveGratitude.classList.remove('btn-success');
+  }, 1500);
+}
+
+function renderGratitudeHistory() {
+  if (!elements.gratitudeHistoryContainer) return;
+  elements.gratitudeHistoryContainer.innerHTML = '';
+
+  const entries = userState.gratitudeEntries || [];
+
+  // Tomar las últimas 3 entradas registradas (están al principio del array)
+  const last3Entries = entries.slice(0, 3);
+
+  if (last3Entries.length === 0) {
+    elements.gratitudeHistoryContainer.innerHTML = `
+      <div style="text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 0.9rem; font-style: italic;">
+        No hay pensamientos registrados aún. Escribe lo que te hace sonreír hoy.
+      </div>
+    `;
+    return;
+  }
+
+  const heartEmojis = ['💖', '✨', '🌸', '☀️', '🌱'];
+
+  last3Entries.forEach((entry, idx) => {
+    // Escoger emoji decorativo según ID para variedad visual constante
+    const emoji = heartEmojis[entry.id % heartEmojis.length];
+
+    const entryItem = document.createElement('div');
+    entryItem.className = 'gratitude-entry-item';
+
+    entryItem.innerHTML = `
+      <div class="gratitude-entry-header">
+        <span class="gratitude-entry-date">${entry.date}</span>
+        <span class="gratitude-entry-icon">${emoji}</span>
+      </div>
+      <p class="gratitude-entry-text">"${escapeHtml(entry.text)}"</p>
+    `;
+    elements.gratitudeHistoryContainer.appendChild(entryItem);
+  });
+}
+
+// Función auxiliar para sanitizar HTML de las entradas del usuario
+function escapeHtml(unsafe) {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+/* --------------------------------------------------------------------------
+   10C. GESTOR Y PERSISTENCIA DE LA INTENCIÓN DEL DÍA (DAILY FOCUS)
+   -------------------------------------------------------------------------- */
+const INTENTIONS_POOL = [
+  "Hoy elijo la calma y el equilibrio en cada decisión.",
+  "Acepto las cosas que no puedo cambiar y me enfoco en mi paz.",
+  "Trataré a mi mente y cuerpo con suavidad y paciencia.",
+  "Hoy priorizo mi energía y establezco límites saludables.",
+  "Cada respiración me llena de paz y libera mi tensión.",
+  "Agradezco el momento presente y encuentro alegría en lo simple.",
+  "Mi paz interior es mi mayor superpoder hoy.",
+  "Confío en mi proceso y avanzo a mi propio ritmo.",
+  "Hoy hablo conmigo mismo con amabilidad y compasión.",
+  "Soy suficiente tal y como soy aquí y ahora."
+];
+
+function initDailyIntention() {
+  if (!elements.intentionText) return;
+
+  const todayStr = new Date().toLocaleDateString();
+
+  // Si no hay intención configurada hoy, o es de otro día, seleccionar una al azar
+  if (!userState.dailyIntention || userState.dailyIntention.date !== todayStr) {
+    selectRandomIntention(todayStr);
+  } else {
+    // Si ya existe hoy, inyectar
+    elements.intentionText.textContent = userState.dailyIntention.text;
+  }
+
+  // Manejador del botón refrescar
+  if (elements.btnRefreshIntention) {
+    elements.btnRefreshIntention.addEventListener('click', () => {
+      // Girar icono visualmente (rotación 360)
+      const svg = elements.btnRefreshIntention.querySelector('svg');
+      if (svg) {
+        svg.style.transition = 'transform 0.6s ease';
+        svg.style.transform = 'rotate(360deg)';
+        setTimeout(() => {
+          svg.style.transform = 'none';
+          svg.style.transition = 'none';
+        }, 600);
+      }
+
+      // Animación suave de desvanecimiento para el texto al cambiar
+      elements.intentionText.style.opacity = '0';
+      setTimeout(() => {
+        selectRandomIntention(todayStr);
+        elements.intentionText.style.opacity = '1';
+      }, 200);
+    });
+  }
+}
+
+function selectRandomIntention(dateStr) {
+  // Evitar repetir la misma frase que ya está mostrándose si es posible
+  let availablePool = INTENTIONS_POOL;
+  if (userState.dailyIntention && userState.dailyIntention.text) {
+    availablePool = INTENTIONS_POOL.filter(phrase => phrase !== userState.dailyIntention.text);
+  }
+
+  const randomIndex = Math.floor(Math.random() * availablePool.length);
+  const selectedText = availablePool[randomIndex];
+
+  userState.dailyIntention = {
+    text: selectedText,
+    date: dateStr
+  };
+
+  // Guardar en el historial cronológico
+  if (!userState.dailyIntentions) {
+    userState.dailyIntentions = [];
+  }
+  const alreadyExists = userState.dailyIntentions.some(intent => intent.date === dateStr && intent.text === selectedText);
+  if (!alreadyExists) {
+    userState.dailyIntentions.push({
+      id: "intent_" + Date.now(),
+      text: selectedText,
+      date: dateStr
+    });
+  }
+
+  saveUserState();
+  elements.intentionText.textContent = selectedText;
+}
+
+/* --------------------------------------------------------------------------
+   10D. GESTOR DE BASE DE DATOS LOCAL Y SESIONES MULTIUSUARIO (AUTH ENGINE)
+   -------------------------------------------------------------------------- */
+function getUsersDb() {
+  try {
+    const dbStr = localStorage.getItem('aura_users');
+    return dbStr ? JSON.parse(dbStr) : {};
+  } catch (e) {
+    console.error("Error al leer aura_users:", e);
+    return {};
+  }
+}
+
+function saveUsersDb(db) {
+  try {
+    localStorage.setItem('aura_users', JSON.stringify(db));
+  } catch (e) {
+    console.error("Error al guardar aura_users:", e);
+  }
+}
+
+function loadActiveUserSession() {
+  const currentUsername = localStorage.getItem('aura_current_user');
+  if (currentUsername) {
+    const usersDb = getUsersDb();
+    const activeUser = usersDb[currentUsername];
+    if (activeUser) {
+      // Cargar en el estado global unificado
+      userState.isLoggedIn = true;
+      userState.profile.name = activeUser.name || "Usuario";
+      userState.profile.personalityType = activeUser.personality || "balanceado";
+      userState.moodLogs = activeUser.logs || [];
+      userState.gratitudeEntries = activeUser.gratitudeEntries || [];
+      userState.dailyIntention = activeUser.dailyIntention || null;
+      userState.dailyIntentions = activeUser.dailyIntentions || [];
+      userState.preferences = { ...DEFAULT_USER_STATE.preferences, ...(activeUser.preferences || {}) };
+
+      // Sincronizar también con la clave aura_user para compatibilidad con saveData
+      localStorage.setItem('aura_user', JSON.stringify({
+        name: userState.profile.name,
+        personality: userState.profile.personalityType,
+        logs: userState.moodLogs
+      }));
+
+      return true;
+    }
+  }
+  return false;
+}
+
+function saveActiveUserSession() {
+  const currentUsername = localStorage.getItem('aura_current_user');
+  if (currentUsername) {
+    const usersDb = getUsersDb();
+    if (usersDb[currentUsername]) {
+      usersDb[currentUsername].name = userState.profile.name;
+      usersDb[currentUsername].personality = userState.profile.personalityType;
+      usersDb[currentUsername].logs = userState.moodLogs;
+      usersDb[currentUsername].gratitudeEntries = userState.gratitudeEntries;
+      usersDb[currentUsername].dailyIntention = userState.dailyIntention;
+      usersDb[currentUsername].dailyIntentions = userState.dailyIntentions;
+      usersDb[currentUsername].preferences = userState.preferences;
+
+      saveUsersDb(usersDb);
+
+      // Mantener sincronizado aura_user
+      localStorage.setItem('aura_user', JSON.stringify({
+        name: userState.profile.name,
+        personality: userState.profile.personalityType,
+        logs: userState.moodLogs
+      }));
+    }
+  }
+}
+
+
+function saveData(newData) {
+  try {
+    const saved = localStorage.getItem('aura_user');
+    if (saved) {
+      const userProfile = JSON.parse(saved);
+      if (!userProfile.logs) {
+        userProfile.logs = [];
+      }
+
+      if (newData.date) {
+        userProfile.logs = userProfile.logs.filter(log => log.date !== newData.date);
+      }
+
+      userProfile.logs.push(newData);
+      localStorage.setItem('aura_user', JSON.stringify(userProfile));
+
+      userState.moodLogs = userProfile.logs;
+    }
+
+    // Persistir en la base de datos de usuarios
+    const currentUsername = localStorage.getItem('aura_current_user');
+    if (currentUsername) {
+      const usersDb = getUsersDb();
+      if (usersDb[currentUsername]) {
+        usersDb[currentUsername].logs = userState.moodLogs;
+        saveUsersDb(usersDb);
+      }
+    }
+  } catch (e) {
+    console.error("Error al guardar datos con saveData:", e);
+  }
+}
+
+function initOnboarding() {
+  if (!elements.onboardingModal) return;
+
+  const sessionActive = loadActiveUserSession();
+  if (sessionActive) {
+    setupLoggedInUI();
+  } else {
+    setupLoggedOutUI();
+  }
+}
+
+function setupLoggedInUI() {
+  // Ocultar modal
+  elements.onboardingModal.classList.remove('active');
+
+  // Mostrar badge del usuario y botón de cerrar sesión
+  elements.userBadge.style.display = 'inline-flex';
+  elements.logoutBtn.style.display = 'flex';
+
+  // Configurar inicial del avatar y el nombre de usuario
+  const userName = userState.profile.name || "Usuario";
+  elements.userAvatarChar.textContent = userName.charAt(0).toUpperCase();
+  elements.userNameLabel.textContent = userName;
+
+  // Saludo personalizado en el hero
+  if (elements.heroTitle) {
+    elements.heroTitle.textContent = `Hola, ${userName}. Encuentra tu equilibrio mental`;
+  }
+}
+
+function setupLoggedOutUI() {
+  // Limpiar inputs y errores
+  elements.loginUsername.value = '';
+  elements.loginPassword.value = '';
+  elements.loginErrorMsg.style.display = 'none';
+  elements.btnSubmitLogin.disabled = true;
+
+  elements.registerUsername.value = '';
+  elements.registerPassword.value = '';
+  elements.registerName.value = '';
+  if (elements.registerAnswer) elements.registerAnswer.value = '';
+  elements.registerErrorMsg.style.display = 'none';
+  elements.btnSubmitRegister.disabled = true;
+
+  // Limpiar recuperar contraseña
+  if (elements.recoverUsername) {
+    elements.recoverUsername.value = '';
+    elements.recoverAnswer.value = '';
+    elements.recoverNewPassword.value = '';
+    elements.recoverUserError.style.display = 'none';
+    elements.recoverAnswerError.style.display = 'none';
+    elements.recoverSuccessMsg.style.display = 'none';
+    elements.btnRecoverCheckUser.disabled = true;
+    elements.btnSubmitRecovery.disabled = true;
+    elements.recoverStep1.style.display = 'block';
+    elements.recoverStep2.style.display = 'none';
+  }
+
+  // Mostrar vista de Login por defecto
+  elements.authLoginView.style.display = 'block';
+  elements.authRegisterView.style.display = 'none';
+  if (elements.authRecoverView) elements.authRecoverView.style.display = 'none';
+
+  // Ocultar elementos del header para usuarios no autenticados
+  elements.userBadge.style.display = 'none';
+  elements.logoutBtn.style.display = 'none';
+
+  // Restaurar título hero original
+  if (elements.heroTitle) {
+    elements.heroTitle.textContent = 'Encuentra tu equilibrio mental';
+  }
+
+  // Mostrar modal
+  elements.onboardingModal.classList.add('active');
+}
+
+function logoutUser() {
+  // Asegurar que vuelve al dashboard
+  toggleProfileView(false);
+
+  // Detener sintetizadores de audio si están sonando
+  if (state.isAudioPlaying) {
+    state.isAudioPlaying = false;
+    stopCurrentSynthesizers(0.3);
+    elements.audioStatusBox.classList.remove('playing');
+    elements.audioDescription.textContent = 'Sonido ambiental pausado';
+  }
+
+  // Limpiar sesión actual
+  localStorage.removeItem('aura_current_user');
+  localStorage.removeItem('aura_user');
+
+  // Limpiar el estado de la aplicación
+  userState.isLoggedIn = false;
+  userState.profile = { name: "", personalityType: "balanceado" };
+  userState.moodLogs = [];
+  userState.gratitudeEntries = [];
+  userState.dailyIntention = null;
+  userState.dailyIntentions = [];
+
+  // Resetear formularios y vistas
+  resetTrackerForm();
+  if (elements.gratitudeText) {
+    elements.gratitudeText.value = '';
+    elements.charCounter.textContent = '0/180';
+  }
+
+  // Re-renderizar vistas vacías
+  renderWeeklyHistory();
+  renderGratitudeHistory();
+
+  setupLoggedOutUI();
+}
+
+/* --------------------------------------------------------------------------
+   11. ASOCIACIÓN DE EVENTOS (EVENT LISTENERS) Y BOOTSTRAP
+   -------------------------------------------------------------------------- */
+function bindEvents() {
+  // Conmutador del tema
+  elements.themeToggle.addEventListener('click', toggleTheme);
+
+  // Deslizador de volumen
+  elements.volumeSlider.addEventListener('input', handleVolumeChange);
+
+  // Controles de respiración guiada
+  elements.btnStart.addEventListener('click', handleBreathingStart);
+  elements.btnPause.addEventListener('click', handleBreathingPause);
+  elements.btnReset.addEventListener('click', handleBreathingReset);
+
+  // Selectores de patrones de respiración
+  elements.patternButtons.forEach(btn => {
+    btn.addEventListener('click', changeBreathingPattern);
+  });
+
+  // --- Eventos de Autenticación ---
+
+  // Alternar a registro
+  elements.linkToRegister.addEventListener('click', (e) => {
+    e.preventDefault();
+    elements.authLoginView.style.display = 'none';
+    elements.authRegisterView.style.display = 'block';
+    elements.authRecoverView.style.display = 'none';
+  });
+
+  // Alternar a login
+  elements.linkToLogin.addEventListener('click', (e) => {
+    e.preventDefault();
+    elements.authRegisterView.style.display = 'none';
+    elements.authLoginView.style.display = 'block';
+    elements.authRecoverView.style.display = 'none';
+  });
+
+  // Alternar a recuperación de contraseña
+  elements.linkForgotPassword.addEventListener('click', (e) => {
+    e.preventDefault();
+    elements.authLoginView.style.display = 'none';
+    elements.authRegisterView.style.display = 'none';
+    elements.authRecoverView.style.display = 'block';
+    setupLoggedOutUI(); // Limpia inputs para estar listos
+    elements.authLoginView.style.display = 'none';
+    elements.authRecoverView.style.display = 'block';
+  });
+
+  // Volver a login desde recuperación
+  elements.linkRecoverBackToLogin.addEventListener('click', (e) => {
+    e.preventDefault();
+    setupLoggedOutUI();
+  });
+
+  // Habilitar botón de login al rellenar inputs
+  const validateLoginFields = () => {
+    const userVal = elements.loginUsername.value.trim();
+    const passVal = elements.loginPassword.value;
+    elements.btnSubmitLogin.disabled = (userVal === '' || passVal === '');
+  };
+  elements.loginUsername.addEventListener('input', validateLoginFields);
+  elements.loginPassword.addEventListener('input', validateLoginFields);
+
+  // Habilitar botón de registro al rellenar inputs
+  const validateRegisterFields = () => {
+    const userVal = elements.registerUsername.value.trim();
+    const passVal = elements.registerPassword.value;
+    const nameVal = elements.registerName.value.trim();
+    const answerVal = elements.registerAnswer.value.trim();
+    elements.btnSubmitRegister.disabled = (userVal === '' || passVal === '' || nameVal === '' || answerVal === '');
+  };
+  elements.registerUsername.addEventListener('input', validateRegisterFields);
+  elements.registerPassword.addEventListener('input', validateRegisterFields);
+  elements.registerName.addEventListener('input', validateRegisterFields);
+  elements.registerAnswer.addEventListener('input', validateRegisterFields);
+
+  // Habilitar botón de recuperación Paso 1
+  elements.recoverUsername.addEventListener('input', () => {
+    const userVal = elements.recoverUsername.value.trim();
+    elements.btnRecoverCheckUser.disabled = (userVal === '');
+  });
+
+  // Habilitar botón de recuperación Paso 2
+  const validateRecoveryStep2Fields = () => {
+    const answerVal = elements.recoverAnswer.value.trim();
+    const passVal = elements.recoverNewPassword.value;
+    elements.btnSubmitRecovery.disabled = (answerVal === '' || passVal === '');
+  };
+  elements.recoverAnswer.addEventListener('input', validateRecoveryStep2Fields);
+  elements.recoverNewPassword.addEventListener('input', validateRecoveryStep2Fields);
+
+  // Procesar Login
+  elements.btnSubmitLogin.addEventListener('click', () => {
+    const username = elements.loginUsername.value.trim().toLowerCase();
+    const password = elements.loginPassword.value;
+
+    const db = getUsersDb();
+    const user = db[username];
+
+    if (user && user.password === password) {
+      elements.loginErrorMsg.style.display = 'none';
+      localStorage.setItem('aura_current_user', username);
+
+      // Cargar sesión del usuario recién ingresado
+      loadActiveUserSession();
+      setupLoggedInUI();
+
+      // Forzar renderizado de sus datos personales
+      renderWeeklyHistory();
+      renderGratitudeHistory();
+      initDailyIntention();
+      initTheme();
+      if (elements.volumeSlider) {
+        elements.volumeSlider.value = userState.preferences.volume;
+      }
+    } else {
+      elements.loginErrorMsg.style.display = 'block';
+    }
+  });
+
+  // Procesar Registro
+  elements.btnSubmitRegister.addEventListener('click', () => {
+    const username = elements.registerUsername.value.trim().toLowerCase();
+    const password = elements.registerPassword.value;
+    const name = elements.registerName.value.trim();
+    const personality = elements.registerPersonality.value;
+    const question = elements.registerQuestion.value;
+    const answer = elements.registerAnswer.value.trim().toLowerCase();
+
+    const db = getUsersDb();
+    if (db[username]) {
+      elements.registerErrorMsg.textContent = "El nombre de usuario ya existe.";
+      elements.registerErrorMsg.style.display = 'block';
+      return;
+    }
+
+    // Registrar el nuevo perfil
+    db[username] = {
+      username: username,
+      password: password,
+      name: name,
+      personality: personality,
+      question: question,
+      answer: answer,
+      logs: userState.moodLogs || [],
+      gratitudeEntries: userState.gratitudeEntries || [],
+      dailyIntention: userState.dailyIntention || null,
+      dailyIntentions: userState.dailyIntentions || [],
+      preferences: userState.preferences || { theme: "dark", volume: 0.3 }
+    };
+
+    saveUsersDb(db);
+    elements.registerErrorMsg.style.display = 'none';
+
+    // Iniciar sesión automáticamente
+    localStorage.setItem('aura_current_user', username);
+    loadActiveUserSession();
+    setupLoggedInUI();
+
+    // Inicializar vistas con datos nuevos
+    renderWeeklyHistory();
+    renderGratitudeHistory();
+    initDailyIntention();
+  });
+
+  // Paso 1 de recuperación: verificar existencia de usuario
+  elements.btnRecoverCheckUser.addEventListener('click', () => {
+    const username = elements.recoverUsername.value.trim().toLowerCase();
+    const db = getUsersDb();
+    const user = db[username];
+
+    if (user) {
+      elements.recoverUserError.style.display = 'none';
+
+      // Mapeo de preguntas a formato amigable en español
+      const questionsMap = {
+        pet: "¿Cómo se llama tu primera mascota?",
+        city: "¿En qué ciudad naciste?",
+        book: "¿Cuál es tu libro o película favorita?",
+        school: "¿Cómo se llamaba tu primera escuela?"
+      };
+
+      const questionText = questionsMap[user.question] || "¿Cómo se llama tu primera mascota?";
+      elements.recoverQuestionText.textContent = questionText;
+
+      // Mostrar paso 2
+      elements.recoverStep1.style.display = 'none';
+      elements.recoverStep2.style.display = 'block';
+    } else {
+      elements.recoverUserError.style.display = 'block';
+    }
+  });
+
+  // Paso 2 de recuperación: verificar respuesta de seguridad y restablecer contraseña
+  elements.btnSubmitRecovery.addEventListener('click', () => {
+    const username = elements.recoverUsername.value.trim().toLowerCase();
+    const answer = elements.recoverAnswer.value.trim().toLowerCase();
+    const newPassword = elements.recoverNewPassword.value;
+
+    const db = getUsersDb();
+    const user = db[username];
+
+    // Si la respuesta guardada coincide (las guardamos en minúsculas)
+    if (user && user.answer === answer) {
+      elements.recoverAnswerError.style.display = 'none';
+
+      // Actualizar la contraseña
+      user.password = newPassword;
+      db[username] = user;
+      saveUsersDb(db);
+
+      // Mostrar mensaje de éxito
+      elements.recoverStep2.style.display = 'none';
+      elements.recoverSuccessMsg.style.display = 'block';
+
+      // Redirigir de vuelta a Iniciar Sesión después de un momento
+      setTimeout(() => {
+        setupLoggedOutUI();
+      }, 2500);
+    } else {
+      elements.recoverAnswerError.style.display = 'block';
+    }
+  });
+
+  // Cierre de Sesión
+  elements.logoutBtn.addEventListener('click', logoutUser);
+
+  // --- Eventos de Vista Perfil ---
+
+  // Abrir perfil al pulsar en el user badge
+  elements.userBadge.addEventListener('click', () => {
+    toggleProfileView(true);
+  });
+
+  // Volver al dashboard
+  elements.btnProfileBack.addEventListener('click', () => {
+    toggleProfileView(false);
+  });
+
+  // Guardar cambios del perfil
+  elements.btnSaveProfileChanges.addEventListener('click', saveProfileChanges);
+}
+
+/* --------------------------------------------------------------------------
+   12. CONTROLADOR DE PERFIL, ESTADÍSTICAS Y PROGRESO DE USUARIO
+   -------------------------------------------------------------------------- */
+function computeUserStats() {
+  const logs = userState.moodLogs || [];
+  const gratitudes = userState.gratitudeEntries || [];
+
+  // 1. Totales
+  const totalLogs = logs.length;
+  const totalGratitudes = gratitudes.length;
+
+  // 2. Ánimo Dominante
+  let dominantMood = "Ninguno";
+  if (totalLogs > 0) {
+    const moodCounts = {};
+    logs.forEach(log => {
+      if (log.mood) {
+        moodCounts[log.mood] = (moodCounts[log.mood] || 0) + 1;
+      }
+    });
+
+    let maxMood = "";
+    let maxCount = 0;
+    for (const m in moodCounts) {
+      if (moodCounts[m] > maxCount) {
+        maxCount = moodCounts[m];
+        maxMood = m;
+      }
+    }
+
+    const moodMeta = {
+      ansioso: { emoji: '😰', label: 'Ansioso' },
+      'en-paz': { emoji: '🧘‍♀️', label: 'En Paz' },
+      cansado: { emoji: '😴', label: 'Cansado' },
+      alegre: { emoji: '😊', label: 'Alegre' },
+      triste: { emoji: '😢', label: 'Triste' }
+    };
+
+    if (maxMood && moodMeta[maxMood]) {
+      dominantMood = `${moodMeta[maxMood].label} ${moodMeta[maxMood].emoji}`;
+    }
+  }
+
+  // 3. Intensidad promedio de síntomas/tensión
+  let avgIntensity = 0;
+  if (totalLogs > 0) {
+    const sum = logs.reduce((acc, log) => acc + Number(log.intensity || 0), 0);
+    avgIntensity = (sum / totalLogs).toFixed(1);
+  }
+
+  // 4. Síntoma más frecuente
+  let commonSymptom = "Ninguno";
+  const symptomCounts = {};
+  let totalSymptomsCount = 0;
+  logs.forEach(log => {
+    if (log.symptoms && Array.isArray(log.symptoms)) {
+      log.symptoms.forEach(sym => {
+        symptomCounts[sym] = (symptomCounts[sym] || 0) + 1;
+        totalSymptomsCount++;
+      });
+    }
+  });
+
+  if (totalSymptomsCount > 0) {
+    let maxSym = "";
+    let maxCount = 0;
+    for (const s in symptomCounts) {
+      if (symptomCounts[s] > maxCount) {
+        maxCount = symptomCounts[s];
+        maxSym = s;
+      }
+    }
+    commonSymptom = maxSym;
+  }
+
+  return {
+    totalLogs,
+    totalGratitudes,
+    dominantMood,
+    avgIntensity,
+    commonSymptom
+  };
+}
+
+function renderProfileStats() {
+  const stats = computeUserStats();
+
+  if (elements.statTotalLogs) elements.statTotalLogs.textContent = stats.totalLogs;
+  if (elements.statTotalGratitudes) elements.statTotalGratitudes.textContent = stats.totalGratitudes;
+  if (elements.statDominantMood) elements.statDominantMood.textContent = stats.dominantMood;
+  if (elements.statCommonSymptom) elements.statCommonSymptom.textContent = stats.commonSymptom;
+
+  if (elements.statAvgIntensity) {
+    elements.statAvgIntensity.textContent = `${stats.avgIntensity} / 5`;
+  }
+  if (elements.statAvgIntensityFill) {
+    const percentage = Math.min(100, (stats.avgIntensity / 5) * 100);
+    elements.statAvgIntensityFill.style.width = `${percentage}%`;
+  }
+}
+
+function renderProfileHistoryLists() {
+  // 1. Historial de Ánimos
+  if (elements.profileMoodHistoryList) {
+    const logs = [...(userState.moodLogs || [])].reverse();
+
+    if (logs.length === 0) {
+      elements.profileMoodHistoryList.innerHTML = `<p class="history-empty-text">No hay registros de ánimo guardados.</p>`;
+    } else {
+      const moodMeta = {
+        ansioso: { emoji: '😰', label: 'Ansioso' },
+        'en-paz': { emoji: '🧘‍♀️', label: 'En Paz' },
+        cansado: { emoji: '😴', label: 'Cansado' },
+        alegre: { emoji: '😊', label: 'Alegre' },
+        triste: { emoji: '😢', label: 'Triste' }
+      };
+
+      elements.profileMoodHistoryList.innerHTML = logs.map(log => {
+        const meta = moodMeta[log.mood] || { emoji: '⭐', label: log.mood };
+        const symptomsText = log.symptoms && log.symptoms.length > 0
+          ? log.symptoms.join(', ')
+          : 'Sin síntomas físicos';
+
+        return `
+          <div class="history-item">
+            <div class="history-item-left">
+              <span class="history-item-emoji">${meta.emoji}</span>
+              <div class="history-item-info">
+                <span class="history-item-title">${meta.label} (Intensidad: ${log.intensity}/5)</span>
+                <span class="history-item-subtitle" title="${symptomsText}">${symptomsText}</span>
+              </div>
+            </div>
+            <div class="history-item-right">
+              <span class="history-item-date">${log.date}</span>
+              <button class="btn-delete-history btn-delete-mood-log" data-id="${log.id}" title="Eliminar registro">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  <line x1="10" y1="11" x2="10" y2="17"></line>
+                  <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Enlazar listeners de borrado
+      elements.profileMoodHistoryList.querySelectorAll('.btn-delete-mood-log').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          deleteMoodLog(id);
+        });
+      });
+    }
+  }
+
+  // 2. Historial de Gratitud
+  if (elements.profileGratitudeHistoryList) {
+    const entries = [...(userState.gratitudeEntries || [])].reverse();
+
+    if (entries.length === 0) {
+      elements.profileGratitudeHistoryList.innerHTML = `<p class="history-empty-text">No hay notas de gratitud guardadas.</p>`;
+    } else {
+      elements.profileGratitudeHistoryList.innerHTML = entries.map(ent => {
+        return `
+          <div class="history-item">
+            <div class="history-item-left">
+              <span class="history-item-emoji">💖</span>
+              <div class="history-item-info">
+                <span class="history-item-title" title="${ent.text}">${ent.text}</span>
+              </div>
+            </div>
+            <div class="history-item-right">
+              <span class="history-item-date">${ent.date}</span>
+              <button class="btn-delete-history btn-delete-gratitude-entry" data-id="${ent.id}" title="Eliminar nota">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  <line x1="10" y1="11" x2="10" y2="17"></line>
+                  <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Enlazar listeners de borrado
+      elements.profileGratitudeHistoryList.querySelectorAll('.btn-delete-gratitude-entry').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          deleteGratitudeEntry(id);
+        });
+      });
+    }
+  }
+
+  // 3. Historial de Intenciones del Día
+  if (elements.profileIntentionHistoryList) {
+    const intentions = [...(userState.dailyIntentions || [])].reverse();
+
+    if (intentions.length === 0) {
+      elements.profileIntentionHistoryList.innerHTML = `<p class="history-empty-text">No hay intenciones registradas aún.</p>`;
+    } else {
+      elements.profileIntentionHistoryList.innerHTML = intentions.map(intent => {
+        return `
+          <div class="history-item">
+            <div class="history-item-left">
+              <span class="history-item-emoji">✨</span>
+              <div class="history-item-info">
+                <span class="history-item-title" title="${intent.text}">${intent.text}</span>
+              </div>
+            </div>
+            <div class="history-item-right">
+              <span class="history-item-date">${intent.date}</span>
+              <button class="btn-delete-history btn-delete-intention-entry" data-id="${intent.id}" title="Eliminar intención">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  <line x1="10" y1="11" x2="10" y2="17"></line>
+                  <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Enlazar listeners de borrado
+      elements.profileIntentionHistoryList.querySelectorAll('.btn-delete-intention-entry').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          deleteIntentionEntry(id);
+        });
+      });
+    }
+  }
+}
+
+function deleteIntentionEntry(id) {
+  userState.dailyIntentions = userState.dailyIntentions.filter(intent => intent.id !== id);
+  saveActiveUserSession();
+  renderProfileHistoryLists();
+  applyPersonalityCustomization(userState.profile.personalityType);
+}
+
+function deleteMoodLog(id) {
+  userState.moodLogs = userState.moodLogs.filter(log => log.id !== id);
+  saveActiveUserSession();
+  renderWeeklyHistory();
+  renderProfileStats();
+  renderProfileHistoryLists();
+
+  // Re-renderizar bloque de personalidad por si cambiaron los datos
+  applyPersonalityCustomization(userState.profile.personalityType);
+}
+
+function deleteGratitudeEntry(id) {
+  userState.gratitudeEntries = userState.gratitudeEntries.filter(ent => ent.id !== id);
+  saveActiveUserSession();
+  renderGratitudeHistory();
+  renderProfileStats();
+  renderProfileHistoryLists();
+
+  // Re-renderizar bloque de personalidad por si cambiaron los datos
+  applyPersonalityCustomization(userState.profile.personalityType);
+}
+
+function toggleProfileView(show) {
+  if (show) {
+    const userName = userState.profile.name || "Usuario";
+    const currentUsername = localStorage.getItem('aura_current_user') || "invitado";
+
+    if (elements.profileEditName) elements.profileEditName.value = userName;
+    if (elements.profileEditPersonality) elements.profileEditPersonality.value = userState.profile.personalityType;
+    if (elements.profileUsernameDisplay) elements.profileUsernameDisplay.textContent = `@${currentUsername}`;
+    if (elements.profileAvatarLarge) elements.profileAvatarLarge.textContent = userName.charAt(0).toUpperCase();
+    if (elements.profileEditSuccess) elements.profileEditSuccess.style.display = 'none';
+
+    renderProfileStats();
+    renderProfileHistoryLists();
+
+    // Aplicar personalización por tipo de personalidad
+    applyPersonalityCustomization(userState.profile.personalityType);
+
+    // Cambiar vistas
+    elements.dashboardView.style.display = 'none';
+    elements.profileView.style.display = 'block';
+  } else {
+    elements.profileView.style.display = 'none';
+    elements.dashboardView.style.display = 'block';
+  }
+}
+
+function saveProfileChanges() {
+  const newName = elements.profileEditName.value.trim();
+  const newPersonality = elements.profileEditPersonality.value;
+
+  if (newName) {
+    userState.profile.name = newName;
+    userState.profile.personalityType = newPersonality;
+
+    saveActiveUserSession();
+    applyPersonalityCustomization(newPersonality);
+
+    // Sincronizar UI
+    elements.userAvatarChar.textContent = newName.charAt(0).toUpperCase();
+    elements.userNameLabel.textContent = newName;
+    if (elements.profileAvatarLarge) elements.profileAvatarLarge.textContent = newName.charAt(0).toUpperCase();
+
+    if (elements.heroTitle) {
+      elements.heroTitle.textContent = `Hola, ${newName}. Encuentra tu equilibrio mental`;
+    }
+
+    if (elements.profileEditSuccess) {
+      elements.profileEditSuccess.style.display = 'block';
+      setTimeout(() => {
+        elements.profileEditSuccess.style.display = 'none';
+      }, 2000);
+    }
+  }
+}
+
+function applyPersonalityCustomization(personality) {
+  const customContainer = document.getElementById('profile-personality-custom');
+  if (!customContainer) return;
+
+  let customizationHTML = "";
+
+  if (personality === 'analitico') {
+    customizationHTML = `
+      <div class="glass-card personality-highlight-card">
+        <h3 class="card-title">📊 Enfoque Analítico: Análisis de Estabilidad</h3>
+        <p class="card-description">Tu mente procesa el bienestar a través de métricas y regularidad. Aquí tienes tu reporte cuantitativo de consistencia emocional:</p>
+        <div class="analytics-metrics-box">
+          <div class="metric-row">
+            <span class="profile-data-label">Total de Registros de Ánimo:</span>
+            <strong class="profile-data-value">${userState.moodLogs.length} logs</strong>
+          </div>
+          <div class="metric-row">
+            <span class="profile-data-label">Entradas al Diario:</span>
+            <strong class="profile-data-value">${userState.gratitudeEntries.length} entradas</strong>
+          </div>
+          <div class="metric-row">
+            <span class="profile-data-label">Índice de Estabilidad de Tensión:</span>
+            <strong class="profile-data-value">${calculateStabilityIndex()}%</strong>
+          </div>
+        </div>
+      </div>
+    `;
+  } else if (personality === 'creativo') {
+    customizationHTML = `
+      <div class="glass-card personality-highlight-card">
+        <h3 class="card-title">🎨 Enfoque Creativo: Mosaico Emocional</h3>
+        <p class="card-description">Tu lienzo visual en AURA. Los colores representan la energía de tus registros:</p>
+        <div class="mood-color-canvas">
+          ${renderMoodColorCanvas()}
+        </div>
+      </div>
+    `;
+  } else if (personality === 'sensorial') {
+    customizationHTML = `
+      <div class="glass-card personality-highlight-card">
+        <h3 class="card-title">🎵 Enfoque Sensorial: Frecuencia sugerida</h3>
+        <p class="card-description">Los estímulos sonoros potencian tu introspección. Frecuencia sugerida según tu estado actual:</p>
+        <div class="sensory-suggestion-box">
+          <div class="suggestion-badge">${getSensorySuggestion()}</div>
+          <p class="suggestion-tip">Usa los sintetizadores de este tipo al meditar hoy para lograr una mejor sintonía.</p>
+        </div>
+      </div>
+    `;
+  } else { // balanceado o cualquier otro
+    customizationHTML = `
+      <div class="glass-card personality-highlight-card">
+        <h3 class="card-title">☯️ Enfoque Balanceado: Armonía de Actividad</h3>
+        <p class="card-description">Mantienes una proporción equilibrada entre registros cuantitativos y reflexiones escritas:</p>
+        <div class="balance-indicator-container">
+          <div class="balance-dot-track">
+            <div class="balance-dot" style="left: ${calculateBalancePercentage()}%"></div>
+          </div>
+          <div class="balance-labels">
+            <span>Analítico (Registros)</span>
+            <span>Centro</span>
+            <span>Creativo (Diario)</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  customContainer.innerHTML = customizationHTML;
+}
+
+function calculateStabilityIndex() {
+  const logs = userState.moodLogs || [];
+  if (logs.length < 2) return 100;
+
+  const intensities = logs.map(l => Number(l.intensity || 0));
+  const mean = intensities.reduce((a, b) => a + b, 0) / intensities.length;
+  const variance = intensities.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intensities.length;
+
+  // Menor varianza = mayor estabilidad (0 de varianza = 100% estabilidad)
+  const index = Math.max(10, Math.round(100 - (variance * 25)));
+  return index;
+}
+
+function renderMoodColorCanvas() {
+  const logs = userState.moodLogs || [];
+  if (logs.length === 0) {
+    return `<p class="canvas-empty">Comienza a registrar tus emociones para pintar tu lienzo.</p>`;
+  }
+
+  const moodColors = {
+    ansioso: 'rgba(239, 68, 68, 0.7)',  // rojo
+    'en-paz': 'rgba(79, 209, 197, 0.7)', // turquesa
+    cansado: 'rgba(246, 173, 85, 0.7)',  // naranja
+    alegre: 'rgba(236, 201, 75, 0.7)',  // amarillo
+    triste: 'rgba(99, 179, 237, 0.7)'   // celeste
+  };
+
+  const moodNames = {
+    ansioso: 'Ansioso',
+    'en-paz': 'En Paz',
+    cansado: 'Cansado',
+    alegre: 'Alegre',
+    triste: 'Triste'
+  };
+
+  return logs.map(log => {
+    const color = moodColors[log.mood] || 'rgba(156, 163, 175, 0.7)';
+    const label = moodNames[log.mood] || log.mood;
+    return `<div class="mood-canvas-dot" style="background-color: ${color};" title="${label} - ${log.date}"></div>`;
+  }).join('');
+}
+
+function getSensorySuggestion() {
+  const stats = computeUserStats();
+  if (stats.dominantMood.includes('Ansioso') || stats.dominantMood.includes('Triste')) {
+    return '🧘 Oleaje Oceánico (Ruido Rosa)';
+  } else if (stats.dominantMood.includes('Cansado')) {
+    return '⚡ Frecuencia Binaural de 10Hz (Alfa/Enfoque)';
+  } else {
+    return '👁️ Ondas Binaurales Alfa (Quietud)';
+  }
+}
+
+function calculateBalancePercentage() {
+  const logsCount = userState.moodLogs.length;
+  const gratitudesCount = userState.gratitudeEntries.length;
+  if (logsCount === 0 && gratitudesCount === 0) return 50;
+
+  const total = logsCount + gratitudesCount;
+  // Porcentaje hacia la derecha (creativo/diario)
+  return Math.round((gratitudesCount / total) * 100);
+}
+
+function init() {
+  loadUserState(); // Cargar preferencias globales
+  initOnboarding(); // Iniciar onboarding de autenticación local
+  elements.volumeSlider.value = userState.preferences.volume;
+  initTheme();
+  renderMoodSelector();
+  initTracker();
+  renderWeeklyHistory();
+  initGratitudeJournal();
+  renderGratitudeHistory();
+  initDailyIntention();
+  bindEvents();
+}
+
+// Cargar la aplicación cuando el DOM esté listo
+document.addEventListener('DOMContentLoaded', init);
